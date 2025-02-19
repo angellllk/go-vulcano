@@ -1,9 +1,10 @@
-package core
+package port_scanner
 
 import (
 	"context"
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"go-vulcano/models"
 	"net"
 	"sort"
 	"sync"
@@ -33,7 +34,7 @@ func (ps *PortScanner) Name() string {
 }
 
 // Configure configures the scanner.
-func (ps *PortScanner) Configure(cfg PortScannerConfig) error {
+func (ps *PortScanner) Configure(cfg Config) {
 	ps.StartPort = cfg.StartPort
 	ps.EndPort = cfg.EndPort
 	ps.Timeout = time.Millisecond * time.Duration(cfg.Timeout)
@@ -41,11 +42,10 @@ func (ps *PortScanner) Configure(cfg PortScannerConfig) error {
 	ps.MaxWorkers = cfg.MaxWorkers
 	ps.IdleTimeout = time.Millisecond * time.Duration(cfg.IdleTimeout)
 	ps.RateLimit = time.Millisecond * 10
-	return nil
 }
 
 // Run performs the port scan for the given target.
-func (ps *PortScanner) Run(target *TargetInfo) (ScanResult, error) {
+func (ps *PortScanner) Run(target *models.TargetInfo) (*models.DTO, error) {
 	logrus.Infof("Starting Single Phase Port Scan on %s", target.Domain)
 
 	// Set an overall context timeout based on the number of ports plus an extra buffer.
@@ -156,8 +156,8 @@ func (ps *PortScanner) Run(target *TargetInfo) (ScanResult, error) {
 	logrus.Infof("Open ports on %s: %v", target.Domain, openPorts)
 
 	// Cache the results
-	var result ScanResult
+	var result models.DTO
 	result.Ports = openPorts
 
-	return result, nil
+	return &result, nil
 }
