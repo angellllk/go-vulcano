@@ -9,15 +9,16 @@ type Settings struct {
 
 type PSConfig struct {
 	gorm.Model
-	StartPort   int `db:"start_port"`
-	EndPort     int `db:"end_port"`
-	Timeout     int `db:"timeout"`
-	MinWorkers  int `db:"min_workers"`
-	MaxWorkers  int `db:"max_workers"`
-	IdleTimeout int `db:"idle_timeout"`
+	StartPort   int `gorm:"start_port"`
+	EndPort     int `gorm:"end_port"`
+	Timeout     int `gorm:"timeout"`
+	MinWorkers  int `gorm:"min_workers"`
+	MaxWorkers  int `gorm:"max_workers"`
+	IdleTimeout int `gorm:"idle_timeout"`
 }
 
 type PluginsDB struct {
 	gorm.Model
-	PortScanner bool `db:"port_scanner"`
+	PortScanner bool `gorm:"port_scanner"`
+	DNSResolver bool `gorm:"dns_resolver"`
 }

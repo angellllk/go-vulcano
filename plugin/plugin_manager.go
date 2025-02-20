@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/sirupsen/logrus"
 	"go-vulcano/database"
+	dns "go-vulcano/dns-resolver"
 	"go-vulcano/models"
 	ps "go-vulcano/port-scanner"
 	"strings"
@@ -46,6 +47,10 @@ func (m *Manager) init() {
 			IdleTimeout: settings.IdleTimeout,
 		})
 	}
+
+	if settings.PluginsDB.DNSResolver {
+		m.Add(&dns.DNSResolver{})
+	}
 }
 
 // Add plugs in a new Plugin.
@@ -86,6 +91,7 @@ func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
 	e := make([]error, len(m.plugins))
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	for i, p := range m.plugins {
 		wg.Add(1)
@@ -97,7 +103,10 @@ func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
 				e[idx] = err
 				return
 			}
+
+			mu.Lock()
 			partials[idx] = dto
+			mu.Unlock()
 		}(i, p)
 	}
 
@@ -106,6 +115,8 @@ func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
 	var ret models.DTO
 	for _, pr := range partials {
 		ret.Ports = append(ret.Ports, pr.Ports...)
+		ret.DNS = append(ret.DNS, pr.DNS...)
+		ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
 	}
 
 	return &ret, nil
@@ -172,14 +183,33 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 func (m *Manager) Settings(settings models.SettingsAPI) error {
 	var names []string
 
+	var dbSettings database.Settings
+
 	// Add or remove plugin based on settings
 	if settings.Plugins.PortScanner {
 		if m.Get(PortScanner) == nil {
 			m.Add(&ps.PortScanner{})
-			names = append(names, PortScanner)
+		}
+
+		names = append(names, PortScanner)
+		dbSettings.PSConfig = database.PSConfig{
+			StartPort:   settings.Config.StartPort,
+			EndPort:     settings.Config.EndPort,
+			Timeout:     settings.Config.Timeout,
+			MinWorkers:  settings.Config.MinWorkers,
+			MaxWorkers:  settings.Config.MaxWorkers,
+			IdleTimeout: settings.Config.IdleTimeout,
 		}
 	} else {
 		m.Remove(PortScanner)
+	}
+
+	if settings.Plugins.DNSResolver {
+		if m.Get(DNSResolver) == nil {
+			m.Add(&dns.DNSResolver{})
+		}
+	} else {
+		m.Remove(DNSResolver)
 	}
 
 	for _, name := range names {
@@ -203,18 +233,9 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 	}
 
 	// Prepare database DTO
-	dbSettings := database.Settings{
-		PSConfig: database.PSConfig{
-			StartPort:   settings.Config.StartPort,
-			EndPort:     settings.Config.EndPort,
-			Timeout:     settings.Config.Timeout,
-			MinWorkers:  settings.Config.MinWorkers,
-			MaxWorkers:  settings.Config.MaxWorkers,
-			IdleTimeout: settings.Config.IdleTimeout,
-		},
-		PluginsDB: database.PluginsDB{
-			PortScanner: settings.Plugins.PortScanner,
-		},
+	dbSettings.PluginsDB = database.PluginsDB{
+		PortScanner: settings.Plugins.PortScanner,
+		DNSResolver: settings.Plugins.DNSResolver,
 	}
 	if err := m.db.UpdateSettings(dbSettings); err != nil {
 		return err

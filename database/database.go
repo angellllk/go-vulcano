@@ -33,12 +33,28 @@ func (db *DB) Migrate() error {
 
 // UpdateSettings update current settings.
 func (db *DB) UpdateSettings(data Settings) error {
-	if err := db.conn.Where("id > 0").Save(&data.PSConfig).Error; err != nil {
+	var psConfig PSConfig
+	if err := db.conn.FirstOrCreate(&psConfig, PSConfig{Model: gorm.Model{ID: 1}}).Error; err != nil {
 		return err
 	}
-	if err := db.conn.Where("id > 0").Save(&data.PluginsDB).Error; err != nil {
+
+	data.PSConfig.Model.ID = psConfig.Model.ID
+
+	if err := db.conn.Save(&data.PSConfig).Error; err != nil {
 		return err
 	}
+
+	var pluginsDB PluginsDB
+	if err := db.conn.FirstOrCreate(&pluginsDB, PluginsDB{Model: gorm.Model{ID: 1}}).Error; err != nil {
+		return err
+	}
+
+	data.PluginsDB.Model.ID = pluginsDB.Model.ID
+
+	if err := db.conn.Save(&data.PluginsDB).Error; err != nil {
+		return err
+	}
+
 	return nil
 }
 
