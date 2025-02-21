@@ -28,19 +28,25 @@ func New() (*DB, error) {
 
 // Migrate migrates the current database structures.
 func (db *DB) Migrate() error {
-	return db.conn.AutoMigrate(PSConfig{}, PluginsDB{})
+	return db.conn.AutoMigrate(PSConfigDB{}, PluginsDB{}, ScanResultDB{}, SubdomainDB{})
+}
+
+// SaveScan saves the scan data.
+func (db *DB) SaveScan(data *ScanResultDB) error {
+	if err := db.conn.Create(data).Error; err != nil {
+		return err
+	}
+	return nil
 }
 
 // UpdateSettings update current settings.
-func (db *DB) UpdateSettings(data Settings) error {
-	var psConfig PSConfig
-	if err := db.conn.FirstOrCreate(&psConfig, PSConfig{Model: gorm.Model{ID: 1}}).Error; err != nil {
+func (db *DB) UpdateSettings(data SettingsDB) error {
+	var psConfig PSConfigDB
+	if err := db.conn.FirstOrCreate(&psConfig, PSConfigDB{Model: gorm.Model{ID: 1}}).Error; err != nil {
 		return err
 	}
-
-	data.PSConfig.Model.ID = psConfig.Model.ID
-
-	if err := db.conn.Save(&data.PSConfig).Error; err != nil {
+	data.PSConfigDB.Model.ID = psConfig.Model.ID
+	if err := db.conn.Save(&data.PSConfigDB).Error; err != nil {
 		return err
 	}
 
@@ -48,9 +54,7 @@ func (db *DB) UpdateSettings(data Settings) error {
 	if err := db.conn.FirstOrCreate(&pluginsDB, PluginsDB{Model: gorm.Model{ID: 1}}).Error; err != nil {
 		return err
 	}
-
 	data.PluginsDB.Model.ID = pluginsDB.Model.ID
-
 	if err := db.conn.Save(&data.PluginsDB).Error; err != nil {
 		return err
 	}
@@ -59,9 +63,9 @@ func (db *DB) UpdateSettings(data Settings) error {
 }
 
 // FetchSettings fetches the last used settings.
-func (db *DB) FetchSettings() Settings {
-	var result Settings
-	db.conn.First(&result.PSConfig)
+func (db *DB) FetchSettings() SettingsDB {
+	var result SettingsDB
+	db.conn.First(&result.PSConfigDB)
 	db.conn.First(&result.PluginsDB)
 	return result
 }

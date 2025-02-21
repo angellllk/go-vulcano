@@ -1,12 +1,14 @@
 package plugin
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/sirupsen/logrus"
 	"go-vulcano/database"
 	dns "go-vulcano/dns-resolver"
 	"go-vulcano/models"
 	ps "go-vulcano/port-scanner"
+	"gorm.io/datatypes"
 	"strings"
 	"sync"
 	"time"
@@ -85,43 +87,6 @@ func (m *Manager) Get(name string) Plugin {
 	return nil
 }
 
-// RunAll calls for all the available Plugins.
-func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
-	partials := make([]*models.DTO, len(m.plugins))
-	e := make([]error, len(m.plugins))
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for i, p := range m.plugins {
-		wg.Add(1)
-		go func(idx int, p Plugin) {
-			defer wg.Done()
-
-			dto, err := p.Run(target)
-			if err != nil {
-				e[idx] = err
-				return
-			}
-
-			mu.Lock()
-			partials[idx] = dto
-			mu.Unlock()
-		}(i, p)
-	}
-
-	wg.Wait()
-
-	var ret models.DTO
-	for _, pr := range partials {
-		ret.Ports = append(ret.Ports, pr.Ports...)
-		ret.DNS = append(ret.DNS, pr.DNS...)
-		ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
-	}
-
-	return &ret, nil
-}
-
 // Scan triggers a parallel scan over the targets.
 func (m *Manager) Scan(targets []string) []models.ScanResult {
 	var results []models.ScanResult
@@ -179,11 +144,50 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 	return results
 }
 
+// RunAll calls for all the available Plugins.
+func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
+	partials := make([]*models.DTO, len(m.plugins))
+	e := make([]error, len(m.plugins))
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i, p := range m.plugins {
+		wg.Add(1)
+		go func(idx int, p Plugin) {
+			defer wg.Done()
+
+			dto, err := p.Run(target)
+			if err != nil {
+				e[idx] = err
+				return
+			}
+
+			mu.Lock()
+			partials[idx] = dto
+			mu.Unlock()
+		}(i, p)
+	}
+
+	wg.Wait()
+
+	var ret models.DTO
+	for _, pr := range partials {
+		ret.Ports = append(ret.Ports, pr.Ports...)
+		ret.DNS = append(ret.DNS, pr.DNS...)
+		ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
+	}
+
+	ret.Target = target.Domain
+
+	return &ret, nil
+}
+
 // Settings sets up a plugin with new settings.
 func (m *Manager) Settings(settings models.SettingsAPI) error {
 	var names []string
 
-	var dbSettings database.Settings
+	var dbSettings database.SettingsDB
 
 	// Add or remove plugin based on settings
 	if settings.Plugins.PortScanner {
@@ -192,7 +196,7 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 		}
 
 		names = append(names, PortScanner)
-		dbSettings.PSConfig = database.PSConfig{
+		dbSettings.PSConfigDB = database.PSConfigDB{
 			StartPort:   settings.Config.StartPort,
 			EndPort:     settings.Config.EndPort,
 			Timeout:     settings.Config.Timeout,
@@ -241,5 +245,46 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 		return err
 	}
 
+	return nil
+}
+
+// SaveScan records the ScanResult in database.
+func (m *Manager) SaveScan(data []models.ScanResult) error {
+	for _, d := range data {
+		portsJson, err := json.Marshal(d.Ports)
+		if err != nil {
+			return err
+		}
+		dnsJson, err := json.Marshal(d.DNS)
+		if err != nil {
+			return err
+		}
+
+		var subdomains []database.SubdomainDB
+		for _, s := range d.Subdomains {
+			ipJson, err := json.Marshal(s.IPs)
+			if err != nil {
+				return err
+			}
+			subdomainDto := database.SubdomainDB{
+				Name: s.Name,
+				IPs:  ipJson,
+			}
+			subdomains = append(subdomains, subdomainDto)
+		}
+
+		scanResult := database.ScanResultDB{
+			Target:          d.Target,
+			Duration:        d.Duration,
+			Ports:           datatypes.JSON(portsJson),
+			DNS:             datatypes.JSON(dnsJson),
+			Subdomains:      subdomains,
+			Vulnerabilities: nil,
+		}
+
+		if err = m.db.SaveScan(&scanResult); err != nil {
+			return err
+		}
+	}
 	return nil
 }

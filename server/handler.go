@@ -32,6 +32,12 @@ func (h *Handler) ScanHandler(ctx fiber.Ctx) error {
 	// Start the scan over targets
 	results := h.pm.Scan(data.Targets)
 
+	// Save results in database
+	if err := h.pm.SaveScan(results); err != nil {
+		br.Message = "Unexpected internal error occurred."
+		return ctx.Status(fiber.StatusInternalServerError).JSON(br)
+	}
+
 	return ctx.Status(fiber.StatusOK).JSON(ScanResponse{
 		Results: results,
 	})
