@@ -1,5 +1,11 @@
 package dns_resolver
 
+// Structure used for transporting results after each search
+type lookupResult struct {
+	subdomain string
+	ips       []string
+}
+
 var commonSubdomains = []string{
 	"www",
 	"mail",

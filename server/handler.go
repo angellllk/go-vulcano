@@ -8,7 +8,7 @@ import (
 
 // Handler defines an HTTP handler.
 type Handler struct {
-	pm *plugin.Manager
+	pm *plugin.Manager // pm defines the *plugin.Manager used in operations.
 }
 
 // ScanHandler defines the handler for the /scan endpoint.

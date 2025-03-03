@@ -72,6 +72,55 @@ func fetchCRTSubdomains(domain string) ([]string, error) {
 	return subdomains, nil
 }
 
+// lookupSubdomain runs the DNS lookup for every subdomain and sends the results to the channel.
+func (d *DNSResolver) lookupSubdomain(ctx context.Context, target *models.TargetInfo, sd string, resultsCh chan<- lookupResult) {
+	fullSubdomain := sd
+	if !strings.Contains(sd, ".") {
+		fullSubdomain = fmt.Sprintf("%s.%s", sd, target.Domain)
+	}
+	ips, err := net.DefaultResolver.LookupHost(ctx, fullSubdomain)
+	if err != nil {
+		logrus.Debugf("Lookup failed for %s: %v", fullSubdomain, err)
+		return
+	}
+	logrus.Infof("Resolved %s -> %v", fullSubdomain, ips)
+	resultsCh <- lookupResult{
+		subdomain: fullSubdomain,
+		ips:       ips,
+	}
+}
+
+// startLocalLookups launches goroutines for each subdomain from the local list.
+func (d *DNSResolver) startLocalLookups(ctx context.Context, target *models.TargetInfo, resultsCh chan<- lookupResult, wg *sync.WaitGroup) {
+	for _, sub := range commonSubdomains {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			d.lookupSubdomain(ctx, target, s, resultsCh)
+		}(sub)
+	}
+}
+
+// startCRTSubdomainLookups obtains subdomains from crt.sh and launches goroutines for each one of them.
+func (d *DNSResolver) startCRTSubdomainLookups(ctx context.Context, target *models.TargetInfo, resultsCh chan<- lookupResult, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		subdomains, err := fetchCRTSubdomains(target.Domain)
+		if err != nil {
+			logrus.Errorf("Error fetching crt.sh data: %v", err)
+			return
+		}
+		for _, sd := range subdomains {
+			wg.Add(1)
+			go func(s string) {
+				defer wg.Done()
+				d.lookupSubdomain(ctx, target, s, resultsCh)
+			}(sd)
+		}
+	}()
+}
+
 // normalizeSubdomain removes "www." from a subdomain.
 func normalizeSubdomain(sd string) string {
 	return strings.TrimPrefix(sd, "www.")
@@ -87,78 +136,12 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
-// Run performs the DNS resolving on the target.
-func (d *DNSResolver) Run(target *models.TargetInfo) (*models.DTO, error) {
+// aggregateResults receives the results from the channel and aggregates them.
+func (d *DNSResolver) aggregateResults(resultsCh <-chan lookupResult) models.DTO {
 	var result models.DTO
-
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	// Structure used for transporting results after each search
-	type lookupResult struct {
-		subdomain string
-		ips       []string
-	}
-
-	resultsCh := make(chan lookupResult, len(commonSubdomains))
-	var wg sync.WaitGroup
-
 	ipSet := make(map[string]struct{})
-
-	lookupSubdomain := func(sd string) {
-		fullSubdomain := sd
-		if !strings.Contains(sd, ".") {
-			fullSubdomain = fmt.Sprintf("%s.%s", sd, target.Domain)
-		}
-		ips, err := net.DefaultResolver.LookupHost(ctx, fullSubdomain)
-		if err != nil {
-			logrus.Debugf("Lookup failed for %s: %v", fullSubdomain, err)
-			return
-		}
-		logrus.Infof("Resolved %s -> %v", fullSubdomain, ips)
-		resultsCh <- lookupResult{
-			subdomain: fullSubdomain,
-			ips:       ips,
-		}
-	}
-
-	// Use the local wordlist
-	for _, sub := range commonSubdomains {
-		wg.Add(1)
-		go func(s string) {
-			defer wg.Done()
-			lookupSubdomain(s)
-		}(sub)
-	}
-
-	// Use crt.sh for further subdomains
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		subdomains, err := fetchCRTSubdomains(target.Domain)
-		if err != nil {
-			logrus.Errorf("Error fetching crt.sh data: %v", err)
-			return
-		}
-		for _, sd := range subdomains {
-			wg.Add(1)
-			go func(s string) {
-				defer wg.Done()
-				lookupSubdomain(s)
-			}(sd)
-		}
-	}()
-
-	// Close channels when all goroutines exit
-	go func() {
-		wg.Wait()
-		close(resultsCh)
-	}()
-
 	subdomainMap := make(map[string]models.SubdomainDTO)
 
-	// Receive from channel
 	for res := range resultsCh {
 		norm := normalizeSubdomain(res.subdomain)
 		if existing, exists := subdomainMap[norm]; exists {
@@ -175,7 +158,6 @@ func (d *DNSResolver) Run(target *models.TargetInfo) (*models.DTO, error) {
 			}
 		}
 
-		// Add IPs without duplicates
 		for _, ip := range res.ips {
 			if _, exists := ipSet[ip]; !exists {
 				ipSet[ip] = struct{}{}
@@ -187,6 +169,26 @@ func (d *DNSResolver) Run(target *models.TargetInfo) (*models.DTO, error) {
 	for _, dto := range subdomainMap {
 		result.Subdomains = append(result.Subdomains, dto)
 	}
+	return result
+}
 
-	return &result, nil
+// Run orchestrates the DNS resolving process.
+func (d *DNSResolver) Run(target *models.TargetInfo) (*models.DTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	resultsCh := make(chan lookupResult, len(commonSubdomains))
+	var wg sync.WaitGroup
+
+	d.startLocalLookups(ctx, target, resultsCh, &wg)
+
+	d.startCRTSubdomainLookups(ctx, target, resultsCh, &wg)
+
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	dto := d.aggregateResults(resultsCh)
+	return &dto, nil
 }

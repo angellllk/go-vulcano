@@ -44,6 +44,60 @@ func (ps *PortScanner) Configure(cfg Config) {
 	ps.RateLimit = time.Millisecond * 10
 }
 
+// worker defines the logic of finding open ports using TCP.
+func (ps *PortScanner) worker(target *models.TargetInfo, currentWorkers int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
+	defer wg.Done()
+	// Each worker gets its own idle timer.
+	idleTimer := time.NewTimer(ps.IdleTimeout)
+	defer idleTimer.Stop()
+	var dialer net.Dialer
+	for {
+		select {
+		case <-ctx.Done():
+			atomic.AddInt32(&currentWorkers, -1)
+			return
+		case port, ok := <-portChan:
+			if !ok {
+				atomic.AddInt32(&currentWorkers, -1)
+				return
+			}
+			// Wait for a rate limiter token.
+			<-limiter.C
+
+			// Reset idle timer.
+			if !idleTimer.Stop() {
+				<-idleTimer.C
+			}
+			idleTimer.Reset(ps.IdleTimeout)
+
+			address := fmt.Sprintf("%s:%d", target.Domain, port)
+			// Create a per-dial context with the specified timeout.
+			dialCtx, cancelDial := context.WithTimeout(ctx, ps.Timeout)
+			startTime := time.Now()
+			conn, err := dialer.DialContext(dialCtx, "tcp", address)
+			duration := time.Since(startTime)
+			cancelDial()
+
+			// Apply a simple throttle if the dial took too long.
+			if duration > ps.Timeout {
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			if err == nil {
+				resultsChan <- port
+				conn.Close()
+				logrus.Debugf("Port %d open (in %v)", port, duration)
+			} else {
+				logrus.Tracef("Port %d closed (error: %v, in %v)", port, err, duration)
+			}
+		case <-idleTimer.C:
+			// Worker idle: exit.
+			atomic.AddInt32(&currentWorkers, -1)
+			return
+		}
+	}
+}
+
 // Run performs the port scan for the given target.
 func (ps *PortScanner) Run(target *models.TargetInfo) (*models.DTO, error) {
 	logrus.Infof("Starting Single Phase Port Scan on %s", target.Domain)
@@ -65,64 +119,10 @@ func (ps *PortScanner) Run(target *models.TargetInfo) (*models.DTO, error) {
 	// Use an atomic counter for the current number of workers.
 	var currentWorkers = int32(ps.MinWorkers)
 
-	// worker is the function that scans ports.
-	worker := func() {
-		defer wg.Done()
-		// Each worker gets its own idle timer.
-		idleTimer := time.NewTimer(ps.IdleTimeout)
-		defer idleTimer.Stop()
-		var dialer net.Dialer
-		for {
-			select {
-			case <-ctx.Done():
-				atomic.AddInt32(&currentWorkers, -1)
-				return
-			case port, ok := <-portChan:
-				if !ok {
-					atomic.AddInt32(&currentWorkers, -1)
-					return
-				}
-				// Wait for a rate limiter token.
-				<-limiter.C
-
-				// Reset idle timer.
-				if !idleTimer.Stop() {
-					<-idleTimer.C
-				}
-				idleTimer.Reset(ps.IdleTimeout)
-
-				address := fmt.Sprintf("%s:%d", target.Domain, port)
-				// Create a per-dial context with the specified timeout.
-				dialCtx, cancelDial := context.WithTimeout(ctx, ps.Timeout)
-				startTime := time.Now()
-				conn, err := dialer.DialContext(dialCtx, "tcp", address)
-				duration := time.Since(startTime)
-				cancelDial()
-
-				// Apply a simple throttle if the dial took too long.
-				if duration > ps.Timeout {
-					time.Sleep(100 * time.Millisecond)
-				}
-
-				if err == nil {
-					resultsChan <- port
-					conn.Close()
-					logrus.Debugf("Port %d open (in %v)", port, duration)
-				} else {
-					logrus.Tracef("Port %d closed (error: %v, in %v)", port, err, duration)
-				}
-			case <-idleTimer.C:
-				// Worker idle: exit.
-				atomic.AddInt32(&currentWorkers, -1)
-				return
-			}
-		}
-	}
-
 	// Spawn the initial worker pool.
 	for i := 0; i < ps.MinWorkers; i++ {
 		wg.Add(1)
-		go worker()
+		go ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
 	}
 
 	// Producer: enqueue all port numbers.
@@ -137,7 +137,7 @@ func (ps *PortScanner) Run(target *models.TargetInfo) (*models.DTO, error) {
 				if len(portChan) > 10 && atomic.LoadInt32(&currentWorkers) < int32(ps.MaxWorkers) {
 					atomic.AddInt32(&currentWorkers, 1)
 					wg.Add(1)
-					go worker()
+					go ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
 				}
 			}
 		}

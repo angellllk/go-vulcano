@@ -8,6 +8,7 @@ import (
 	dns "go-vulcano/dns-resolver"
 	"go-vulcano/models"
 	ps "go-vulcano/port-scanner"
+	it "go-vulcano/web-scanner"
 	"gorm.io/datatypes"
 	"strings"
 	"sync"
@@ -16,8 +17,8 @@ import (
 
 // Manager defines the Plugin Manager containing all the plugins.
 type Manager struct {
-	plugins []Plugin
-	db      *database.DB
+	plugins []Plugin     // plugins defines the Plugins handled by the Manager.
+	db      *database.DB // db defines the SQLite database connection.
 }
 
 // NewManager initializes a new *Manager.
@@ -53,6 +54,10 @@ func (m *Manager) init() {
 	if settings.PluginsDB.DNSResolver {
 		m.Add(&dns.DNSResolver{})
 	}
+
+	if settings.PluginsDB.WebScanner {
+		m.Add(&it.WebScanner{})
+	}
 }
 
 // Add plugs in a new Plugin.
@@ -87,6 +92,42 @@ func (m *Manager) Get(name string) Plugin {
 	return nil
 }
 
+func (m *Manager) trimAndParseTarget(target string) (models.TargetInfo, error) {
+	targetURL := strings.TrimSpace(target)
+	ti, err := ParseTargetInfo(targetURL)
+	if err != nil {
+		// TODO: Error handling through channels
+		logrus.Errorf("failed to parse info: %v", err)
+		return models.TargetInfo{}, err
+	}
+	return ti, nil
+}
+
+// runPluginsInParallel runs a parallel scan using all the available plugins.
+func (m *Manager) runPluginsInParallel(target *models.TargetInfo, wg *sync.WaitGroup) (models.ScanResult, error) {
+	defer wg.Done()
+
+	start := time.Now()
+	logrus.Infof("Scanning target: %s", target.FullURL)
+
+	// Run plugins
+	dto, err := m.runAll(target)
+	if err != nil {
+		// TODO: Error handling through channels
+		logrus.Errorf("failed to run plugin: %v", err)
+		return models.ScanResult{}, err
+	}
+
+	// Basic metrics for completion time
+	elapsed := time.Since(start)
+
+	var ret models.ScanResult
+	ret.Fill(dto)
+	ret.Duration = elapsed.String()
+
+	return ret, nil
+}
+
 // Scan triggers a parallel scan over the targets.
 func (m *Manager) Scan(targets []string) []models.ScanResult {
 	var results []models.ScanResult
@@ -97,39 +138,20 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 
 	// Iterate over targets
 	for _, t := range targets {
-		// Trim spaces and parse data
-		targetURL := strings.TrimSpace(t)
-		ti, err := ParseTargetInfo(targetURL)
+		ti, err := m.trimAndParseTarget(t)
 		if err != nil {
-			// TODO: Error handling through channels
-			logrus.Errorf("failed to parse info: %v", err)
 			continue
 		}
 
 		// Increment WaitGroup counter per goroutine
 		wg.Add(1)
 
-		// Start goroutine
+		// Start parallel run
 		go func(target *models.TargetInfo) {
-			defer wg.Done()
-
-			start := time.Now()
-			logrus.Infof("Scanning target: %s", target.FullURL)
-
-			// Run plugins
-			dto, err := m.RunAll(target)
+			ret, err := m.runPluginsInParallel(target, &wg)
 			if err != nil {
-				// TODO: Error handling through channels
-				logrus.Errorf("failed to run plugin: %v", err)
 				return
 			}
-
-			// Basic metrics for completion time
-			elapsed := time.Since(start)
-
-			var ret models.ScanResult
-			ret.Fill(dto)
-			ret.Duration = elapsed.String()
 
 			// Save result
 			mu.Lock()
@@ -144,8 +166,8 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 	return results
 }
 
-// RunAll calls for all the available Plugins.
-func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
+// runAll calls for all the available Plugins.
+func (m *Manager) runAll(target *models.TargetInfo) (*models.DTO, error) {
 	partials := make([]*models.DTO, len(m.plugins))
 	e := make([]error, len(m.plugins))
 
@@ -173,13 +195,16 @@ func (m *Manager) RunAll(target *models.TargetInfo) (*models.DTO, error) {
 
 	var ret models.DTO
 	for _, pr := range partials {
+		if pr == nil {
+			continue
+		}
 		ret.Ports = append(ret.Ports, pr.Ports...)
 		ret.DNS = append(ret.DNS, pr.DNS...)
 		ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
+		ret.Vulnerabilities = append(ret.Vulnerabilities, pr.Vulnerabilities...)
 	}
 
 	ret.Target = target.Domain
-
 	return &ret, nil
 }
 
@@ -216,6 +241,14 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 		m.Remove(DNSResolver)
 	}
 
+	if settings.Plugins.WebScanner {
+		if m.Get(WebScanner) == nil {
+			m.Add(&it.WebScanner{})
+		}
+	} else {
+		m.Remove(WebScanner)
+	}
+
 	for _, name := range names {
 		plugin := m.Get(name)
 		if plugin == nil {
@@ -240,6 +273,7 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 	dbSettings.PluginsDB = database.PluginsDB{
 		PortScanner: settings.Plugins.PortScanner,
 		DNSResolver: settings.Plugins.DNSResolver,
+		WebScanner:  settings.Plugins.WebScanner,
 	}
 	if err := m.db.UpdateSettings(dbSettings); err != nil {
 		return err

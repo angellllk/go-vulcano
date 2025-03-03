@@ -8,7 +8,7 @@ type ScanResult struct {
 	DNS        []string    `json:"dns,omitempty"`
 	Subdomains []Subdomain `json:"subdomains,omitempty"`
 	//Banners         map[int]string
-	//Vulnerabilities []Vulnerability `json:"vulns,omitempty"`
+	Vulnerabilities []VulnerabilityDTO `json:"vulns,omitempty"`
 }
 
 type Subdomain struct {
@@ -30,6 +30,11 @@ func (s *ScanResult) Fill(dto *DTO) {
 			})
 		}
 	}
+
+	if dto.Vulnerabilities != nil {
+		s.Vulnerabilities = make([]VulnerabilityDTO, 0, len(dto.Vulnerabilities))
+		s.Vulnerabilities = append(s.Vulnerabilities, dto.Vulnerabilities...)
+	}
 }
 
 // SubdomainDTO defines the Subdomain data to be returned.
@@ -46,7 +51,15 @@ type DTO struct {
 	DNS        []string       `json:"dns,omitempty"`
 	Subdomains []SubdomainDTO `json:"subdomains,omitempty"`
 	//Banners    map[int]string
-	//Vulnerabilities []VulnerabilityDTO `json:"vulns,omitempty"`
+	Vulnerabilities []VulnerabilityDTO `json:"vulns,omitempty"`
+}
+
+type VulnerabilityDTO struct {
+	PluginName  string `json:"plugin_name"`
+	Title       string `json:"title"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Evidence    string `json:"evidence"`
 }
 
 // SettingsAPI defines the possible configurations that end users can set.
@@ -59,6 +72,7 @@ type SettingsAPI struct {
 type Plugins struct {
 	PortScanner bool `json:"port_scanner"`
 	DNSResolver bool `json:"dns_resolver"`
+	WebScanner  bool `json:"web_scanner"`
 	// Add other plugins...
 }
 

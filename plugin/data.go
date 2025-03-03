@@ -8,6 +8,7 @@ import (
 
 const PortScanner = "Port Scanner"
 const DNSResolver = "DNS Resolver"
+const WebScanner = "Web Scanner"
 
 // ParseTargetInfo parses a URL string into a TargetInfo structure.
 func ParseTargetInfo(rawURL string) (models.TargetInfo, error) {

@@ -24,6 +24,7 @@ type PluginsDB struct {
 	gorm.Model
 	PortScanner bool `gorm:"port_scanner"`
 	DNSResolver bool `gorm:"dns_resolver"`
+	WebScanner  bool `gorm:"web_scanner"`
 }
 
 type ScanResultDB struct {
