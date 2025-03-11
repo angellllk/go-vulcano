@@ -3,7 +3,7 @@
 `go-vulcano` intends to be a security tool designed to perform various tasks, including:
 - 🔍 Port Scanning
 - 🌐 DNS Resolving
-- 🔎 Web Vulnerability Scanning
+- 🔎 Web Vulnerability Scanning (WIP)
 
 This `README.md` will be updated occasionally when new features/plans appear.
 
