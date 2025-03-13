@@ -27,7 +27,6 @@ func NewManager(db *database.DB) *Manager {
 		plugins: make([]Plugin, 0),
 		db:      db,
 	}
-
 	m.init()
 	return m
 }
@@ -35,12 +34,15 @@ func NewManager(db *database.DB) *Manager {
 // init initializes the Manager with last used settings.
 func (m *Manager) init() {
 	settings := m.db.FetchSettings()
+	m.addPlugins(settings)
+}
 
-	if settings.PluginsDB.PortScanner {
-		// Add port scanner plugin
+// addPlugins adds the plugins based on the settings.
+func (m *Manager) addPlugins(settings database.SettingsDB) {
+	if settings.PortScanner {
 		m.Add(&ps.PortScanner{})
 		p := m.Get(PortScanner).(*ps.PortScanner)
-
+		// Apply settings
 		p.Configure(ps.Config{
 			StartPort:   settings.StartPort,
 			EndPort:     settings.EndPort,
@@ -50,12 +52,10 @@ func (m *Manager) init() {
 			IdleTimeout: settings.IdleTimeout,
 		})
 	}
-
-	if settings.PluginsDB.DNSResolver {
+	if settings.DNSResolver {
 		m.Add(&dns.DNSResolver{})
 	}
-
-	if settings.PluginsDB.WebScanner {
+	if settings.WebScanner {
 		m.Add(&it.WebScanner{})
 	}
 }
@@ -92,6 +92,7 @@ func (m *Manager) Get(name string) Plugin {
 	return nil
 }
 
+// trimAndParseTarget parses the target URL and returns the TargetInfo.
 func (m *Manager) trimAndParseTarget(target string) (models.TargetInfo, error) {
 	targetURL := strings.TrimSpace(target)
 	ti, err := ParseTargetInfo(targetURL)
@@ -104,14 +105,15 @@ func (m *Manager) trimAndParseTarget(target string) (models.TargetInfo, error) {
 }
 
 // runPluginsInParallel runs a parallel scan using all the available plugins.
-func (m *Manager) runPluginsInParallel(target *models.TargetInfo, wg *sync.WaitGroup) (models.ScanResult, error) {
+func (m *Manager) runPluginsInParallel(target *models.TargetInfo, opts *models.Options, wg *sync.WaitGroup) (models.ScanResult, error) {
 	defer wg.Done()
 
+	// Start timer
 	start := time.Now()
 	logrus.Infof("Scanning target: %s", target.FullURL)
 
 	// Run plugins
-	dto, err := m.runAll(target)
+	dto, err := m.runAll(target, opts)
 	if err != nil {
 		// TODO: Error handling through channels
 		logrus.Errorf("failed to run plugin: %v", err)
@@ -129,12 +131,17 @@ func (m *Manager) runPluginsInParallel(target *models.TargetInfo, wg *sync.WaitG
 }
 
 // Scan triggers a parallel scan over the targets.
-func (m *Manager) Scan(targets []string) []models.ScanResult {
+func (m *Manager) Scan(targets []string, mode string) []models.ScanResult {
 	var results []models.ScanResult
 
 	// Define concurrency controls
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+
+	// Save options to use
+	opts := models.Options{
+		ScanMode: mode,
+	}
 
 	// Iterate over targets
 	for _, t := range targets {
@@ -148,7 +155,7 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 
 		// Start parallel run
 		go func(target *models.TargetInfo) {
-			ret, err := m.runPluginsInParallel(target, &wg)
+			ret, err := m.runPluginsInParallel(target, &opts, &wg)
 			if err != nil {
 				return
 			}
@@ -167,7 +174,7 @@ func (m *Manager) Scan(targets []string) []models.ScanResult {
 }
 
 // runAll calls for all the available Plugins.
-func (m *Manager) runAll(target *models.TargetInfo) (*models.DTO, error) {
+func (m *Manager) runAll(target *models.TargetInfo, opts *models.Options) (*models.DTO, error) {
 	partials := make([]*models.DTO, len(m.plugins))
 	e := make([]error, len(m.plugins))
 
@@ -179,7 +186,7 @@ func (m *Manager) runAll(target *models.TargetInfo) (*models.DTO, error) {
 		go func(idx int, p Plugin) {
 			defer wg.Done()
 
-			dto, err := p.Run(target)
+			dto, err := p.Run(target, opts)
 			if err != nil {
 				e[idx] = err
 				return
@@ -210,10 +217,44 @@ func (m *Manager) runAll(target *models.TargetInfo) (*models.DTO, error) {
 
 // Settings sets up a plugin with new settings.
 func (m *Manager) Settings(settings models.SettingsAPI) error {
-	var names []string
+	// Add or remove plugins based on new settings
+	names, dbSettings := m.addOrRemovePlugins(settings)
 
-	var dbSettings database.SettingsDB
+	for _, name := range names {
+		plugin := m.Get(name)
+		if plugin == nil {
+			continue
+		}
 
+		switch name {
+		case PortScanner:
+			p, ok := plugin.(*ps.PortScanner)
+			if !ok {
+				return errors.New("invalid type conversion to *ps.PortScanner")
+			}
+
+			// Apply new settings
+			p.Configure(ps.Config(settings.Config))
+		default:
+			return errors.New("invalid plugin provided")
+		}
+	}
+
+	// Prepare database DTO
+	dbSettings.PluginsDB = database.PluginsDB{
+		PortScanner: settings.Plugins.PortScanner,
+		DNSResolver: settings.Plugins.DNSResolver,
+		WebScanner:  settings.Plugins.WebScanner,
+	}
+	if err := m.db.UpdateSettings(dbSettings); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addOrRemovePlugins adds or removes plugins based on the settings.
+func (m *Manager) addOrRemovePlugins(settings models.SettingsAPI) (names []string, dbSettings database.SettingsDB) {
 	// Add or remove plugin based on settings
 	if settings.Plugins.PortScanner {
 		if m.Get(PortScanner) == nil {
@@ -249,37 +290,7 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 		m.Remove(WebScanner)
 	}
 
-	for _, name := range names {
-		plugin := m.Get(name)
-		if plugin == nil {
-			continue
-		}
-
-		switch name {
-		case PortScanner:
-			p, ok := plugin.(*ps.PortScanner)
-			if !ok {
-				return errors.New("invalid type conversion to *ps.PortScanner")
-			}
-
-			// Apply new settings
-			p.Configure(ps.Config(settings.Config))
-		default:
-			return errors.New("invalid plugin provided")
-		}
-	}
-
-	// Prepare database DTO
-	dbSettings.PluginsDB = database.PluginsDB{
-		PortScanner: settings.Plugins.PortScanner,
-		DNSResolver: settings.Plugins.DNSResolver,
-		WebScanner:  settings.Plugins.WebScanner,
-	}
-	if err := m.db.UpdateSettings(dbSettings); err != nil {
-		return err
-	}
-
-	return nil
+	return
 }
 
 // SaveScan records the ScanResult in database.

@@ -30,7 +30,7 @@ func (h *Handler) ScanHandler(ctx fiber.Ctx) error {
 	}
 
 	// Start the scan over targets
-	results := h.pm.Scan(data.Targets)
+	results := h.pm.Scan(data.Targets, data.Mode)
 
 	// Save results in database
 	if err := h.pm.SaveScan(results); err != nil {

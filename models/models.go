@@ -92,3 +92,8 @@ type TargetInfo struct {
 	FullURL string
 	Domain  string
 }
+
+// Options defines the options for Plugins.
+type Options struct {
+	ScanMode string
+}

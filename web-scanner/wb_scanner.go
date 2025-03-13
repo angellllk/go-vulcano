@@ -20,7 +20,7 @@ func (w *WebScanner) Name() string {
 }
 
 // Run executes the vulnerability scan on the target.
-func (w *WebScanner) Run(target *models.TargetInfo) (*models.DTO, error) {
+func (w *WebScanner) Run(target *models.TargetInfo, opts *models.Options) (*models.DTO, error) {
 	body, err := getPageContent(target.FullURL)
 	if err != nil {
 		return nil, err
