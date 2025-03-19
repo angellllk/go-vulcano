@@ -29,8 +29,14 @@ func (h *Handler) ScanHandler(ctx fiber.Ctx) error {
 		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(br)
 	}
 
+	// Check if there are any plugins enabled
+	if h.pm.Count() == 0 {
+		br.Message = "No plugins enabled."
+		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(br)
+	}
+
 	// Start the scan over targets
-	results := h.pm.Scan(data.Targets)
+	results := h.pm.Scan(data.Targets, data.Mode)
 
 	// Save results in database
 	if err := h.pm.SaveScan(results); err != nil {

@@ -6,6 +6,11 @@ type lookupResult struct {
 	ips       []string
 }
 
+// crtEntry defines the JSON structure returned by crt.sh
+type crtEntry struct {
+	NameValue string `json:"name_value"`
+}
+
 var commonSubdomains = []string{
 	"www",
 	"mail",
@@ -64,9 +69,4 @@ var commonSubdomains = []string{
 	"video",
 	"media",
 	"panel",
-}
-
-// crtEntry defines the JSON structure returned by crt.sh
-type crtEntry struct {
-	NameValue string `json:"name_value"`
 }

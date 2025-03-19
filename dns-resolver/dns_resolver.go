@@ -173,7 +173,7 @@ func (d *DNSResolver) aggregateResults(resultsCh <-chan lookupResult) models.DTO
 }
 
 // Run orchestrates the DNS resolving process.
-func (d *DNSResolver) Run(target *models.TargetInfo) (*models.DTO, error) {
+func (d *DNSResolver) Run(target *models.TargetInfo, opts *models.Options) (*models.DTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 

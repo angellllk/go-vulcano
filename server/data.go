@@ -18,7 +18,7 @@ func (sr *ScanRequestAPI) Validate() bool {
 	if len(sr.Targets) == 0 || len(sr.Mode) == 0 {
 		return false
 	}
-	if sr.Mode != "tcp" {
+	if sr.Mode != "tcp" && sr.Mode != "syn" {
 		return false
 	}
 	return true

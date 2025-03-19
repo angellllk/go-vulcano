@@ -1,5 +1,7 @@
 package models
 
+import "net"
+
 // ScanResult defines the JSON structure for a result of a scan.
 type ScanResult struct {
 	Target     string      `json:"target,omitempty"`
@@ -89,6 +91,12 @@ type PortScannerConfig struct {
 
 // TargetInfo holds information about a target.
 type TargetInfo struct {
+	IP      net.IP
 	FullURL string
 	Domain  string
+}
+
+// Options defines the options for Plugins.
+type Options struct {
+	ScanMode string
 }
