@@ -1,9 +1,13 @@
 package plugin
 
 import (
+	"context"
 	"errors"
+	"github.com/sirupsen/logrus"
 	"go-vulcano/models"
+	"net"
 	"net/url"
+	"time"
 )
 
 const PortScanner = "Port Scanner"
@@ -22,7 +26,19 @@ func ParseTargetInfo(rawURL string) (models.TargetInfo, error) {
 		return models.TargetInfo{}, errors.New("invalid domain")
 	}
 
+	// Resolve the domain to an IP address
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ips, err := net.DefaultResolver.LookupHost(ctx, domain)
+	if err != nil || len(ips) == 0 {
+		logrus.Errorf("Failed to resolve host %s: %v", domain, err)
+		return models.TargetInfo{}, err
+	}
+	targetIP := net.ParseIP(ips[0])
+
 	return models.TargetInfo{
+		IP:      targetIP,
 		FullURL: rawURL,
 		Domain:  domain,
 	}, nil

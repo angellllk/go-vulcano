@@ -10,6 +10,7 @@ import (
 	ps "go-vulcano/port-scanner"
 	it "go-vulcano/web-scanner"
 	"gorm.io/datatypes"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -99,15 +100,19 @@ func (m *Manager) Get(name string) Plugin {
 	return nil
 }
 
-// trimAndParseTarget parses the target URL and returns the TargetInfo.
+// trimAndParseTarget parses the target data and returns the TargetInfo.
 func (m *Manager) trimAndParseTarget(target string) (models.TargetInfo, error) {
 	targetURL := strings.TrimSpace(target)
 	ti, err := ParseTargetInfo(targetURL)
 	if err != nil {
 		// TODO: Error handling through channels
-		logrus.Errorf("failed to parse info: %v", err)
-		return models.TargetInfo{}, err
+		ti.IP = net.ParseIP(target)
+		if ti.IP == nil {
+			logrus.Errorf("failed to parse target data: %v", err)
+			return models.TargetInfo{}, err
+		}
 	}
+
 	return ti, nil
 }
 
@@ -117,7 +122,7 @@ func (m *Manager) runPluginsInParallel(target *models.TargetInfo, opts *models.O
 
 	// Start timer
 	start := time.Now()
-	logrus.Infof("Scanning target: %s", target.FullURL)
+	logrus.Infof("Scanning target: %s (IP: %s)", target.FullURL, target.IP.String())
 
 	// Run plugins
 	dto, err := m.runAll(target, opts)
