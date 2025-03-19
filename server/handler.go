@@ -29,6 +29,7 @@ func (h *Handler) ScanHandler(ctx fiber.Ctx) error {
 		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(br)
 	}
 
+	// TODO: if there are no plugins enabled, return an error
 	// Start the scan over targets
 	results := h.pm.Scan(data.Targets, data.Mode)
 

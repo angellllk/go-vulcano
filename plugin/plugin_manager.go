@@ -51,6 +51,10 @@ func (m *Manager) addPlugins(settings database.SettingsDB) {
 			MaxWorkers:  settings.MaxWorkers,
 			IdleTimeout: settings.IdleTimeout,
 		})
+		err := p.PrepareSyn()
+		if err != nil {
+			logrus.Fatalf("failed to prepare SYN scan: %v", err)
+		}
 	}
 	if settings.DNSResolver {
 		m.Add(&dns.DNSResolver{})
@@ -62,6 +66,9 @@ func (m *Manager) addPlugins(settings database.SettingsDB) {
 
 // Add plugs in a new Plugin.
 func (m *Manager) Add(p Plugin) {
+	if m.Get(p.Name()) != nil {
+		return
+	}
 	m.plugins = append(m.plugins, p)
 }
 
@@ -233,8 +240,13 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 				return errors.New("invalid type conversion to *ps.PortScanner")
 			}
 
+			// TODO: if config is empty, use default values
 			// Apply new settings
 			p.Configure(ps.Config(settings.Config))
+			err := p.PrepareSyn()
+			if err != nil {
+				logrus.Fatalf("failed to prepare SYN scan: %v", err)
+			}
 		default:
 			return errors.New("invalid plugin provided")
 		}

@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -o port-scanner
+RUN CGO_ENABLED=1 GOOS=linux go build -o port-scanner ./cmd/main.go
 
 # Final stage
 FROM alpine:latest
