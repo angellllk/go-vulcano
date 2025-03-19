@@ -12,6 +12,7 @@ import (
 	"go-vulcano/models"
 	"math/rand"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -66,14 +67,14 @@ func (ps *PortScanner) PrepareSyn() error {
 
 // setInterface finds a suitable network interface for SYN scanning.
 func (ps *PortScanner) setInterface() error {
-	// Find interface to be used for packets.
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
 		logrus.Fatalf("Error finding devices: %v", err)
 	}
+
 	for _, device := range devices {
-		for _, addr := range device.Addresses { // TODO: Change Wi-Fi to a general check for Windows.
-			if ip := addr.IP; ip != nil && ip.To4() != nil && !ip.IsLoopback() && strings.Contains(device.Description, "Wi-Fi") {
+		for _, addr := range device.Addresses {
+			if isValidIP(addr) && isDesiredInterface(device) {
 				ps.Interface = NetworkInterface{Name: device.Name, Address: addr}
 				break
 			}
@@ -85,8 +86,23 @@ func (ps *PortScanner) setInterface() error {
 	if ps.Interface.Name == "" {
 		return errors.New("no suitable network interface found")
 	}
-
 	return nil
+}
+
+// isValidIP checks if the given interface address is a valid IPv4 address.
+func isValidIP(addr pcap.InterfaceAddress) bool {
+	ip := addr.IP
+	return ip != nil && ip.To4() != nil && !ip.IsLoopback()
+}
+
+// isDesiredInterface checks if the given interface is a desired one for SYN scanning.
+func isDesiredInterface(device pcap.Interface) bool {
+	if runtime.GOOS == "windows" {
+		return !strings.Contains(device.Description, "Virtual") && (strings.Contains(device.Description, "Wi-Fi") || strings.Contains(device.Description, "Ethernet"))
+	}
+
+	return strings.HasPrefix(device.Name, "wlp") || strings.HasPrefix(device.Name, "wlan") ||
+		strings.HasPrefix(device.Name, "enp") || strings.HasPrefix(device.Name, "eth")
 }
 
 // setGatewayMAC finds the MAC address of the gateway.
@@ -102,9 +118,19 @@ func (ps *PortScanner) setGatewayMAC() error {
 	}
 	defer handle.Close()
 
-	iface, err := net.InterfaceByName("Wi-Fi")
-	if err != nil {
-		return err
+	var iface *net.Interface
+
+	// TODO: for local testing on Windows, will delete later
+	if runtime.GOOS == "windows" {
+		iface, err = net.InterfaceByName("Wi-Fi")
+		if err != nil {
+			return err
+		}
+	} else {
+		iface, err = net.InterfaceByName(ps.Interface.Name)
+		if err != nil {
+			return err
+		}
 	}
 
 	ethLayer := &layers.Ethernet{
@@ -343,7 +369,13 @@ func (ps *PortScanner) sendSyn(target net.IP, port int, ctx context.Context, res
 		return
 	}
 
-	ps.waitForResponse(packets, srcPort, uint16(port), ps.Timeout, resultsChan)
+	select {
+	case <-ctx.Done():
+		logrus.Errorf("context cancelled or timed out for port %d", port)
+		return
+	default:
+		ps.waitForResponse(packets, srcPort, uint16(port), ps.Timeout, resultsChan)
+	}
 }
 
 // buildSYNPacket constructs and serializes a SYN packet with the given IPs and ports.

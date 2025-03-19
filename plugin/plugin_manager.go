@@ -105,7 +105,6 @@ func (m *Manager) trimAndParseTarget(target string) (models.TargetInfo, error) {
 	targetURL := strings.TrimSpace(target)
 	ti, err := ParseTargetInfo(targetURL)
 	if err != nil {
-		// TODO: Error handling through channels
 		ti.IP = net.ParseIP(target)
 		if ti.IP == nil {
 			logrus.Errorf("failed to parse target data: %v", err)
@@ -159,6 +158,7 @@ func (m *Manager) Scan(targets []string, mode string) []models.ScanResult {
 	for _, t := range targets {
 		ti, err := m.trimAndParseTarget(t)
 		if err != nil {
+			logrus.Errorf("failed to parse target: %v", err)
 			continue
 		}
 
@@ -169,6 +169,7 @@ func (m *Manager) Scan(targets []string, mode string) []models.ScanResult {
 		go func(target *models.TargetInfo) {
 			ret, err := m.runPluginsInParallel(target, &opts, &wg)
 			if err != nil {
+				logrus.Errorf("failed to run plugins in parallel: %v", err)
 				return
 			}
 
@@ -187,11 +188,10 @@ func (m *Manager) Scan(targets []string, mode string) []models.ScanResult {
 
 // runAll calls for all the available Plugins.
 func (m *Manager) runAll(target *models.TargetInfo, opts *models.Options) (*models.DTO, error) {
-	partials := make([]*models.DTO, len(m.plugins))
-	e := make([]error, len(m.plugins))
-
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+
+	partials := make([]*models.DTO, len(m.plugins))
 
 	for i, p := range m.plugins {
 		wg.Add(1)
@@ -200,7 +200,7 @@ func (m *Manager) runAll(target *models.TargetInfo, opts *models.Options) (*mode
 
 			dto, err := p.Run(target, opts)
 			if err != nil {
-				e[idx] = err
+				logrus.Errorf("failed to run plugin %s: %v", p.Name(), err)
 				return
 			}
 
