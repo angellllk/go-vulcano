@@ -18,6 +18,7 @@ type PSConfigDB struct {
 	MinWorkers  int `gorm:"min_workers"`
 	MaxWorkers  int `gorm:"max_workers"`
 	IdleTimeout int `gorm:"idle_timeout"`
+	RateLimit   int `gorm:"rate_limit"`
 }
 
 type PluginsDB struct {

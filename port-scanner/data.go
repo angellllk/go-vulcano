@@ -5,19 +5,9 @@ import (
 	"net"
 )
 
-// Config defines the configuration parameters used to be used
-// by the end-user to redefine settings.
-type Config struct {
-	StartPort   int `json:"start_port"`
-	EndPort     int `json:"end_port"`
-	Timeout     int `json:"timeout"`
-	MinWorkers  int `json:"min_workers"`
-	MaxWorkers  int `json:"max_workers"`
-	IdleTimeout int `json:"idle_timeout"`
-}
-
+// NetworkInterface defines the network interface.
 type NetworkInterface struct {
-	Name    string
-	MAC     net.IP
-	Address pcap.InterfaceAddress
+	Name    string                // Name defines the name of the network interface.
+	MAC     net.IP                // MAC defines the MAC address of the network interface.
+	Address pcap.InterfaceAddress // Address defines the IP address of the network interface.
 }

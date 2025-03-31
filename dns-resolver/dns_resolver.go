@@ -3,6 +3,7 @@ package dns_resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"go-vulcano/models"
@@ -180,8 +181,11 @@ func (d *DNSResolver) Run(target *models.TargetInfo, opts *models.Options) (*mod
 	resultsCh := make(chan lookupResult, len(commonSubdomains))
 	var wg sync.WaitGroup
 
-	d.startLocalLookups(ctx, target, resultsCh, &wg)
+	if target.Domain == "" {
+		return nil, errors.New("no web domain set for target, skipping DNS reverse lookup")
+	}
 
+	d.startLocalLookups(ctx, target, resultsCh, &wg)
 	d.startCRTSubdomainLookups(ctx, target, resultsCh, &wg)
 
 	go func() {

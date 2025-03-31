@@ -38,6 +38,12 @@ func (h *Handler) ScanHandler(ctx fiber.Ctx) error {
 	// Start the scan over targets
 	results := h.pm.Scan(data.Targets, data.Mode)
 
+	// Check if there are any results
+	if len(results) == 0 {
+		br.Message = "No results found."
+		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(br)
+	}
+
 	// Save results in database
 	if err := h.pm.SaveScan(results); err != nil {
 		br.Message = "Unexpected internal error occurred."

@@ -15,7 +15,7 @@ import (
 func TestPortScanner_Configure(t *testing.T) {
 	var ps PortScanner
 
-	cfg := Config{
+	cfg := models.PortScannerConfig{
 		StartPort:   80,
 		EndPort:     100,
 		Timeout:     1000,

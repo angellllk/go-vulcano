@@ -4,12 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
-	"github.com/jackpal/gateway"
-	"github.com/sirupsen/logrus"
-	"go-vulcano/models"
 	"math/rand"
 	"net"
 	"runtime"
@@ -18,6 +12,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	"github.com/jackpal/gateway"
+	"github.com/sirupsen/logrus"
+	"go-vulcano/models"
 )
 
 // PortScanner scans a range of ports using a moderate timeout per port.
@@ -39,14 +40,14 @@ func (ps *PortScanner) Name() string {
 }
 
 // Configure sets up the scanner parameters.
-func (ps *PortScanner) Configure(cfg Config) {
+func (ps *PortScanner) Configure(cfg models.PortScannerConfig) {
 	ps.StartPort = cfg.StartPort
 	ps.EndPort = cfg.EndPort
 	ps.Timeout = time.Millisecond * time.Duration(cfg.Timeout)
 	ps.MinWorkers = cfg.MinWorkers
 	ps.MaxWorkers = cfg.MaxWorkers
 	ps.IdleTimeout = time.Millisecond * time.Duration(cfg.IdleTimeout)
-	ps.RateLimit = time.Millisecond * 10
+	ps.RateLimit = time.Millisecond * time.Duration(cfg.RateLimit)
 	// Optionally, set ps.NetworkInterface from cfg if available.
 }
 
@@ -194,11 +195,7 @@ func (ps *PortScanner) Run(target *models.TargetInfo, opts *models.Options) (*mo
 	sort.Ints(openPorts)
 	logrus.Infof("Open ports on %s (%s): %v", target.Domain, target.IP.String(), openPorts)
 
-	// Cache the results.
-	var result models.DTO
-	result.Ports = openPorts
-
-	return &result, nil
+	return &models.DTO{Ports: openPorts}, nil
 }
 
 // scan starts the scanning procedure.
@@ -210,7 +207,6 @@ func (ps *PortScanner) scan(target net.IP, mode string, resultsChan chan int) {
 
 	// Create a channel for port numbers.
 	portChan := make(chan int, 100)
-
 	var wg sync.WaitGroup
 	var currentWorkers = int32(ps.MinWorkers)
 
@@ -219,18 +215,13 @@ func (ps *PortScanner) scan(target net.IP, mode string, resultsChan chan int) {
 
 	// Use a faster rate limiter for SYN scanning.
 	if mode == "syn" {
-		// TODO: make it customizable
-		limiter = time.NewTicker(time.Nanosecond * 1)
+		limiter = time.NewTicker(1 * time.Nanosecond)
 	}
 
 	// Spawn the initial pool of workers.
 	for i := 0; i < ps.MinWorkers; i++ {
 		wg.Add(1)
-		if mode == "tcp" {
-			go ps.tcpWorker(target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
-		} else {
-			go ps.synWorker(target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
-		}
+		ps.spawnWorker(mode, target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
 	}
 
 	// Producer: enqueue all port numbers.
@@ -245,11 +236,7 @@ func (ps *PortScanner) scan(target net.IP, mode string, resultsChan chan int) {
 				if len(portChan) > 10 && atomic.LoadInt32(&currentWorkers) < int32(ps.MaxWorkers) {
 					atomic.AddInt32(&currentWorkers, 1)
 					wg.Add(1)
-					if mode == "tcp" {
-						go ps.tcpWorker(target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
-					} else {
-						go ps.synWorker(target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
-					}
+					ps.spawnWorker(mode, target, &currentWorkers, portChan, resultsChan, ctx, limiter, &wg)
 				}
 			}
 		}
@@ -260,10 +247,27 @@ func (ps *PortScanner) scan(target net.IP, mode string, resultsChan chan int) {
 	close(resultsChan)
 }
 
+func (ps *PortScanner) spawnWorker(mode string, target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
+	if mode == "tcp" {
+		go ps.tcpWorker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg)
+	} else {
+		go ps.synWorker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg)
+	}
+}
+
+// tcpWorker scans a target port using a TCP connection.
+func (ps *PortScanner) tcpWorker(target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
+	ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg, ps.dialTcp)
+}
+
+// synWorker scans a target port using a SYN packet.
+func (ps *PortScanner) synWorker(target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
+	ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg, ps.sendSyn)
+}
+
 // worker is a generic worker function that scans ports using a specified function.
 func (ps *PortScanner) worker(target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup, scanFunc func(target net.IP, port int, ctx context.Context, resultsChan chan int)) {
 	defer wg.Done()
-
 	idleTimer := time.NewTimer(ps.IdleTimeout)
 	defer idleTimer.Stop()
 
@@ -277,15 +281,8 @@ func (ps *PortScanner) worker(target net.IP, currentWorkers *int32, portChan cha
 				atomic.AddInt32(currentWorkers, -1)
 				return
 			}
-			// Wait for a token from the rate limiter.
 			<-limiter.C
-
-			if !idleTimer.Stop() {
-				<-idleTimer.C
-			}
-			idleTimer.Reset(ps.IdleTimeout)
-
-			// Call the scan function.
+			resetTimer(idleTimer, ps.IdleTimeout)
 			scanFunc(target, port, ctx, resultsChan)
 
 		case <-idleTimer.C:
@@ -295,9 +292,14 @@ func (ps *PortScanner) worker(target net.IP, currentWorkers *int32, portChan cha
 	}
 }
 
-// tcpWorker scans a target port using a TCP connection.
-func (ps *PortScanner) tcpWorker(target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
-	ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg, ps.dialTcp)
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 // dialTcp dials the target port and sends the result to the results channel.
@@ -313,11 +315,7 @@ func (ps *PortScanner) dialTcp(target net.IP, port int, ctx context.Context, res
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(dialCtx, "tcp", address)
 
-	// Simple throttle if dial took too long.
 	duration := time.Since(startTime)
-	if duration > ps.Timeout {
-		time.Sleep(100 * time.Millisecond)
-	}
 
 	// Check if the port is open.
 	if err == nil {
@@ -327,11 +325,6 @@ func (ps *PortScanner) dialTcp(target net.IP, port int, ctx context.Context, res
 	} else {
 		logrus.Tracef("Port %d closed (error: %v, in %v)", port, err, duration)
 	}
-}
-
-// synWorker scans a target port using a SYN packet.
-func (ps *PortScanner) synWorker(target net.IP, currentWorkers *int32, portChan chan int, resultsChan chan int, ctx context.Context, limiter *time.Ticker, wg *sync.WaitGroup) {
-	ps.worker(target, currentWorkers, portChan, resultsChan, ctx, limiter, wg, ps.sendSyn)
 }
 
 // sendSyn sends a SYN packet to the target port and waits for a response.
@@ -353,8 +346,7 @@ func (ps *PortScanner) sendSyn(target net.IP, port int, ctx context.Context, res
 		logrus.Warnf("Failed to set BPF filter: %v", err)
 	}
 
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	packets := packetSource.Packets()
+	packets := gopacket.NewPacketSource(handle, handle.LinkType()).Packets()
 
 	// Build SYN packet
 	rawPacket, err := ps.buildSYNPacket(ps.Interface.Address.IP, target, srcPort, port)
@@ -380,7 +372,7 @@ func (ps *PortScanner) sendSyn(target net.IP, port int, ctx context.Context, res
 
 // buildSYNPacket constructs and serializes a SYN packet with the given IPs and ports.
 func (ps *PortScanner) buildSYNPacket(srcIP, dstIP net.IP, srcPort uint16, dstPort int) ([]byte, error) {
-	iface, err := net.InterfaceByName("Wi-Fi")
+	iface, err := net.InterfaceByName(ps.Interface.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +400,7 @@ func (ps *PortScanner) buildSYNPacket(srcIP, dstIP net.IP, srcPort uint16, dstPo
 
 	buffer := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
-	if err := gopacket.SerializeLayers(buffer, opts, ethLayer, ipLayer, tcpLayer); err != nil {
+	if err = gopacket.SerializeLayers(buffer, opts, ethLayer, ipLayer, tcpLayer); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
@@ -421,14 +413,16 @@ func (ps *PortScanner) waitForResponse(packets chan gopacket.Packet, srcPort, ds
 
 	for {
 		select {
-		case packet := <-packets:
+		case packet, ok := <-packets:
+			if !ok {
+				return false
+			}
+
 			if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 				tcp, _ := tcpLayer.(*layers.TCP)
-				if tcp.DstPort == layers.TCPPort(srcPort) && tcp.SrcPort == layers.TCPPort(dstPort) {
-					if tcp.SYN && tcp.ACK {
-						logrus.Println("Port open:", dstPort)
-						resultsChan <- int(dstPort)
-					}
+				if tcp.DstPort == layers.TCPPort(srcPort) && tcp.SrcPort == layers.TCPPort(dstPort) && tcp.SYN && tcp.ACK {
+					resultsChan <- int(dstPort)
+					return true
 				}
 			}
 		case <-timer.C:

@@ -41,17 +41,21 @@ func (m *Manager) init() {
 // addPlugins adds the plugins based on the settings.
 func (m *Manager) addPlugins(settings database.SettingsDB) {
 	if settings.PortScanner {
-		m.Add(&ps.PortScanner{})
-		p := m.Get(PortScanner).(*ps.PortScanner)
-		// Apply settings
-		p.Configure(ps.Config{
+		cfg := models.PortScannerConfig{
 			StartPort:   settings.StartPort,
 			EndPort:     settings.EndPort,
 			Timeout:     settings.Timeout,
 			MinWorkers:  settings.MinWorkers,
 			MaxWorkers:  settings.MaxWorkers,
 			IdleTimeout: settings.IdleTimeout,
-		})
+			RateLimit:   settings.RateLimit,
+		}
+		cfg.Fill()
+
+		m.Add(&ps.PortScanner{})
+		p := m.Get(PortScanner).(*ps.PortScanner)
+
+		p.Configure(cfg)
 		err := p.PrepareSyn()
 		if err != nil {
 			logrus.Fatalf("failed to prepare SYN scan: %v", err)
@@ -203,6 +207,7 @@ func (m *Manager) runAll(target *models.TargetInfo, opts *models.Options) (*mode
 				logrus.Errorf("failed to run plugin %s: %v", p.Name(), err)
 				return
 			}
+			logrus.Println("Plugin result: ", dto)
 
 			mu.Lock()
 			partials[idx] = dto
@@ -212,18 +217,21 @@ func (m *Manager) runAll(target *models.TargetInfo, opts *models.Options) (*mode
 
 	wg.Wait()
 
-	var ret models.DTO
-	for _, pr := range partials {
-		if pr == nil {
-			continue
-		}
-		ret.Ports = append(ret.Ports, pr.Ports...)
-		ret.DNS = append(ret.DNS, pr.DNS...)
-		ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
-		ret.Vulnerabilities = append(ret.Vulnerabilities, pr.Vulnerabilities...)
+	if len(partials) == 0 {
+		return nil, errors.New("no plugins ran successfully")
 	}
 
-	ret.Target = target.Domain
+	ret := models.DTO{Target: target.Domain}
+	for _, pr := range partials {
+		if pr != nil {
+			logrus.Println("Partial result: ", pr)
+			ret.Ports = append(ret.Ports, pr.Ports...)
+			ret.DNS = append(ret.DNS, pr.DNS...)
+			ret.Subdomains = append(ret.Subdomains, pr.Subdomains...)
+			ret.Vulnerabilities = append(ret.Vulnerabilities, pr.Vulnerabilities...)
+		}
+	}
+
 	return &ret, nil
 }
 
@@ -245,9 +253,8 @@ func (m *Manager) Settings(settings models.SettingsAPI) error {
 				return errors.New("invalid type conversion to *ps.PortScanner")
 			}
 
-			// TODO: if config is empty, use default values
 			// Apply new settings
-			p.Configure(ps.Config(settings.Config))
+			p.Configure(settings.Config)
 			err := p.PrepareSyn()
 			if err != nil {
 				logrus.Fatalf("failed to prepare SYN scan: %v", err)

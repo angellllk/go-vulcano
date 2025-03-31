@@ -87,6 +87,32 @@ type PortScannerConfig struct {
 	MinWorkers  int `json:"min_workers"`
 	MaxWorkers  int `json:"max_workers"`
 	IdleTimeout int `json:"idle_timeout"`
+	RateLimit   int `json:"rate_limit"`
+}
+
+// Fill fills the PortScannerConfig with default values if not provided.
+func (p *PortScannerConfig) Fill() {
+	if p.StartPort < 0 {
+		p.StartPort = 0
+	}
+	if p.EndPort < 0 || p.EndPort < p.StartPort {
+		p.EndPort = p.StartPort + 1
+	}
+	if p.Timeout <= 0 {
+		p.Timeout = 10
+	}
+	if p.MinWorkers < 0 {
+		p.MinWorkers = 0
+	}
+	if p.MaxWorkers < 0 || p.MaxWorkers < p.MinWorkers {
+		p.MaxWorkers = p.MinWorkers + 1
+	}
+	if p.IdleTimeout <= 0 {
+		p.IdleTimeout = 10
+	}
+	if p.RateLimit <= 0 {
+		p.RateLimit = 10
+	}
 }
 
 // TargetInfo holds information about a target.

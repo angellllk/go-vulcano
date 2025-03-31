@@ -70,8 +70,8 @@ type Vulnerability struct {
 
 // Settings defines settings applicable to plugins
 type Settings struct {
-	Config  PortScannerConfig `json:"port_scanner"`
-	Plugins Plugins           `json:"plugins"`
+	Config  models.PortScannerConfig `json:"port_scanner"`
+	Plugins Plugins                  `json:"plugins"`
 }
 
 // Plugins defines all the possible plugins that the end user can enable.
@@ -79,15 +79,4 @@ type Plugins struct {
 	PortScanner bool `json:"port_scanner"`
 	DNSResolver bool `json:"dns_resolver"`
 	// Add other plugins...
-}
-
-// PortScannerConfig defines the configuration parameters used to be used
-// by the end-user to redefine settings.
-type PortScannerConfig struct {
-	StartPort   int `json:"start_port"`
-	EndPort     int `json:"end_port"`
-	Timeout     int `json:"timeout"`
-	MinWorkers  int `json:"min_workers"`
-	MaxWorkers  int `json:"max_workers"`
-	IdleTimeout int `json:"idle_timeout"`
 }
